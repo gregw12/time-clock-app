@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { User, Plus, Clock3, AlertTriangle, Trash2, XCircle } from "lucide-react";
+import { Plus, Clock3, AlertTriangle, Trash2, XCircle } from "lucide-react";
 
 // ---------------------------------------------------------------------
 // PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL HERE (ends in /exec)
@@ -48,16 +48,42 @@ function getUserById(users, id) {
   return users.find((u) => u.id === id) || null;
 }
 
+// ---------- avatar identity ----------
+// A curated palette (not just brand blues) so people stay visually distinct
+// even with a larger roster; deterministic per user so it's stable across
+// sessions/devices without storing anything extra.
+const AVATAR_PALETTE = [
+  "#91c5eb", "#f2a154", "#7fd4a3", "#e08bd9", "#c98bd9",
+  "#f2d060", "#6fd1c7", "#e8896b", "#a3b8f0", "#d97ba0",
+];
+function colorForUser(id) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+function initialsForName(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 // ---------- formatting ----------
+// Pinned to Pacific so the app's clock/ledger always match the Sheet,
+// regardless of the timezone the viewing device happens to be set to.
+const APP_TIMEZONE = "America/Los_Angeles";
+
 function pad(n) { return String(n).padStart(2, "0"); }
 function formatClock(d) {
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return d.toLocaleTimeString("en-US", {
+    timeZone: APP_TIMEZONE, hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
 }
 function formatTimeShort(iso) {
-  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("en-US", { timeZone: APP_TIMEZONE, hour: "2-digit", minute: "2-digit" });
 }
 function formatDateShort(iso) {
-  return new Date(iso).toLocaleDateString([], { month: "2-digit", day: "2-digit" });
+  return new Date(iso).toLocaleDateString("en-US", { timeZone: APP_TIMEZONE, month: "2-digit", day: "2-digit" });
 }
 function formatDuration(ms) {
   const totalMin = Math.floor(ms / 60000);
@@ -125,12 +151,16 @@ export default function TimeClockApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured]);
 
-  function selectUser(id) {
-    setSelectedId(id);
-    setError("");
+  function resetFormState() {
     setShowOutForm(false);
     setBreakMinutes("0");
     setNotes("");
+  }
+
+  function selectUser(id) {
+    setSelectedId(id);
+    setError("");
+    resetFormState();
     loadHistory(id);
   }
 
@@ -150,15 +180,14 @@ export default function TimeClockApp() {
       setNewEmail("");
       setAddingUser(false);
       selectUser(user.id);
-    } catch {
-      setError("Couldn't add that person. Try again.");
+    } catch (err) {
+      setError(err.message || "Couldn't add that person. Try again.");
     } finally {
       setBusy(false);
     }
   }
 
-  // Tapping the big button: clock-in fires immediately, clock-out opens
-  // the break/notes step first.
+  // Clock-in fires immediately; clock-out opens the break/notes step first.
   function handlePunchTap() {
     if (!selectedId || busy) return;
     const clockedIn = statuses[selectedId]?.status === "in";
@@ -183,12 +212,10 @@ export default function TimeClockApp() {
       });
       setStatuses((prev) => ({ ...prev, [selectedId]: result }));
       setStamp({ type: wasIn ? "OUT" : "IN", key: Date.now() });
-      setShowOutForm(false);
-      setBreakMinutes("0");
-      setNotes("");
+      resetFormState();
       loadHistory(selectedId);
-    } catch {
-      setError("Couldn't save that punch. Check your connection and try again.");
+    } catch (err) {
+      setError(err.message || "Couldn't save that punch. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -196,14 +223,14 @@ export default function TimeClockApp() {
 
   async function handleDeleteUser() {
     if (!selectedUser || busy) return;
-    const confirmed = window.confirm(
-      `Remove ${selectedUser.name} from the roster? Their past hours stay in the sheet — this only removes them from the tap list.`
+    const passcode = window.prompt(
+      `Enter the admin passcode to remove ${selectedUser.name} from the roster. Their past hours stay in the sheet — this only removes them from the tap list.`
     );
-    if (!confirmed) return;
+    if (passcode === null) return;
     setBusy(true);
     setError("");
     try {
-      await jsonp({ action: "deleteUser", userId: selectedUser.id });
+      await jsonp({ action: "deleteUser", userId: selectedUser.id, passcode });
       const remaining = users.filter((u) => u.id !== selectedUser.id);
       setUsers(remaining);
       setStatuses((prev) => {
@@ -217,8 +244,8 @@ export default function TimeClockApp() {
         setSelectedId(null);
         setHistory([]);
       }
-    } catch {
-      setError("Couldn't remove that person. Try again.");
+    } catch (err) {
+      setError(err.message || "Couldn't remove that person. Try again.");
     } finally {
       setBusy(false);
     }
@@ -231,12 +258,12 @@ export default function TimeClockApp() {
     setBusy(true);
     setError("");
     try {
-      const result = await jsonp({ action: "cancelPunch", userId: selectedId });
+      await jsonp({ action: "cancelPunch", userId: selectedId });
       setStatuses((prev) => ({ ...prev, [selectedId]: { status: "out", clockInAt: null } }));
-      setShowOutForm(false);
+      resetFormState();
       loadHistory(selectedId);
-    } catch {
-      setError("Couldn't cancel that clock-in. Try again.");
+    } catch (err) {
+      setError(err.message || "Couldn't cancel that clock-in. Try again.");
     } finally {
       setBusy(false);
     }
@@ -308,6 +335,24 @@ export default function TimeClockApp() {
           gap: 8px;
           padding: 16px 20px;
           border-bottom: 1px solid var(--hairline);
+        }
+        .tc-avatar {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          font-family: 'Space Mono', monospace;
+          font-weight: 700;
+          color: var(--bg);
+          flex-shrink: 0;
+        }
+        .tc-avatar-sm { width: 18px; height: 18px; font-size: 8px; }
+        .tc-avatar-lg {
+          width: 56px;
+          height: 56px;
+          font-size: 20px;
+          margin: 0 auto 12px;
+          box-shadow: 0 0 0 3px var(--surface-alt);
         }
         .tc-badge {
           font-family: 'Space Mono', monospace;
@@ -561,7 +606,9 @@ export default function TimeClockApp() {
                   className={`tc-badge${u.id === selectedId ? " active" : ""}`}
                   onClick={() => selectUser(u.id)}
                 >
-                  <User size={12} strokeWidth={2.5} />
+                  <span className="tc-avatar tc-avatar-sm" style={{ background: colorForUser(u.id) }}>
+                    {initialsForName(u.name)}
+                  </span>
                   {u.name}
                 </button>
               ))}
@@ -603,6 +650,12 @@ export default function TimeClockApp() {
 
               {selectedUser && (
                 <>
+                  <div
+                    className="tc-avatar tc-avatar-lg"
+                    style={{ background: colorForUser(selectedUser.id) }}
+                  >
+                    {initialsForName(selectedUser.name)}
+                  </div>
                   <p className="tc-name">{selectedUser.name}</p>
                   <div className="tc-status-row">
                     <span className={`tc-dot ${clockedIn ? "in" : "out"}`} />
@@ -655,7 +708,7 @@ export default function TimeClockApp() {
                         placeholder="What did you work on?"
                       />
                       <div className="tc-outform-actions">
-                        <button className="cancel" onClick={() => setShowOutForm(false)} disabled={busy}>
+                        <button className="cancel" onClick={resetFormState} disabled={busy}>
                           Cancel
                         </button>
                         <button className="confirm" onClick={doPunch} disabled={busy}>
