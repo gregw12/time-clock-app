@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Clock3, AlertTriangle, Trash2, XCircle } from "lucide-react";
+import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut } from "lucide-react";
 
 // ---------------------------------------------------------------------
 // PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL HERE (ends in /exec)
@@ -68,6 +68,370 @@ function initialsForName(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+// ---------- admin helpers ----------
+// Converts a stored "2:07:33 PM" display string into "14:07" for
+// prefilling an <input type="time">.
+function displayTimeToHHMM(str) {
+  if (!str) return "";
+  const m = String(str).match(/(\d+):(\d+):(\d+)\s*(AM|PM)/i);
+  if (!m) return "";
+  let h = parseInt(m[1], 10);
+  const suffix = m[4].toUpperCase();
+  if (suffix === "PM" && h !== 12) h += 12;
+  if (suffix === "AM" && h === 12) h = 0;
+  return String(h).padStart(2, "0") + ":" + m[2];
+}
+// Converts a stored "MM/dd/yyyy" date into "yyyy-MM-dd" for an
+// <input type="date">.
+function displayDateToISO(str) {
+  if (!str) return "";
+  const parts = String(str).split("/");
+  if (parts.length !== 3) return "";
+  return parts[2] + "-" + parts[0].padStart(2, "0") + "-" + parts[1].padStart(2, "0");
+}
+function defaultDateRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
+}
+
+function AdminDashboard({ users, onUsersChange, onClose }) {
+  const [authed, setAuthed] = useState(false);
+  const [masterPin, setMasterPin] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState("sessions");
+
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+
+  const defaults = defaultDateRange();
+  const [payStart, setPayStart] = useState(defaults.start);
+  const [payEnd, setPayEnd] = useState(defaults.end);
+  const [paySummary, setPaySummary] = useState(null);
+  const [payLoading, setPayLoading] = useState(false);
+
+  const [shiftStart, setShiftStart] = useState(defaults.start);
+  const [shiftEnd, setShiftEnd] = useState(defaults.end);
+  const [shifts, setShifts] = useState(null);
+  const [shiftsLoading, setShiftsLoading] = useState(false);
+  const [editingShift, setEditingShift] = useState(null); // shift object being edited
+  const [editDate, setEditDate] = useState("");
+  const [editTimeIn, setEditTimeIn] = useState("");
+  const [editTimeOut, setEditTimeOut] = useState("");
+  const [editBreak, setEditBreak] = useState("0");
+  const [editNotes, setEditNotes] = useState("");
+
+  const [dashError, setDashError] = useState("");
+
+  async function handleAuth(e) {
+    e.preventDefault();
+    if (!masterPin || busy) return;
+    setBusy(true);
+    setAuthError("");
+    try {
+      const result = await jsonp({ action: "adminOpenSessions", masterPin });
+      setSessions(result);
+      setAuthed(true);
+    } catch (err) {
+      setAuthError(err.message || "Couldn't verify that PIN.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadSessions() {
+    setSessionsLoading(true);
+    setDashError("");
+    try {
+      const result = await jsonp({ action: "adminOpenSessions", masterPin });
+      setSessions(result);
+    } catch (err) {
+      setDashError(err.message || "Couldn't load open sessions.");
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function handleForceClockOut(userId, name) {
+    if (!window.confirm(`Force-clock-out ${name}? This closes their session as of right now — you can fix the exact times afterward in Edit Shifts.`)) return;
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({ action: "adminForceClockOut", userId, masterPin });
+      loadSessions();
+    } catch (err) {
+      setDashError(err.message || "Couldn't close that session.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runPayPeriod() {
+    setPayLoading(true);
+    setDashError("");
+    try {
+      const result = await jsonp({ action: "payPeriodSummary", start: payStart, end: payEnd, masterPin });
+      setPaySummary(result);
+    } catch (err) {
+      setDashError(err.message || "Couldn't load the pay period summary.");
+    } finally {
+      setPayLoading(false);
+    }
+  }
+
+  async function runShiftSearch() {
+    setShiftsLoading(true);
+    setDashError("");
+    setEditingShift(null);
+    try {
+      const result = await jsonp({ action: "adminListShifts", start: shiftStart, end: shiftEnd, masterPin });
+      setShifts(result);
+    } catch (err) {
+      setDashError(err.message || "Couldn't load shifts.");
+    } finally {
+      setShiftsLoading(false);
+    }
+  }
+
+  function openEdit(shift) {
+    setEditingShift(shift);
+    setEditDate(displayDateToISO(shift.date));
+    setEditTimeIn(displayTimeToHHMM(shift.timeIn));
+    setEditTimeOut(displayTimeToHHMM(shift.timeOut));
+    const breakParts = String(shift.breakStr || "0:00:00").split(":").map(Number);
+    setEditBreak(String((breakParts[0] || 0) * 60 + (breakParts[1] || 0)));
+    setEditNotes(shift.notes || "");
+  }
+
+  async function saveEdit() {
+    if (!editingShift || busy) return;
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({
+        action: "adminEditShift",
+        shiftId: editingShift.shiftId,
+        date: editDate,
+        timeIn: editTimeIn,
+        timeOut: editTimeOut,
+        breakMinutes: editBreak,
+        notes: editNotes,
+        masterPin,
+      });
+      setEditingShift(null);
+      runShiftSearch();
+    } catch (err) {
+      setDashError(err.message || "Couldn't save that edit.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetPin(userId, name) {
+    const newPin = window.prompt(`New PIN for ${name} (4–8 digits):`);
+    if (newPin === null) return;
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({ action: "adminResetPin", userId, newPin, masterPin });
+      window.alert(`${name}'s PIN has been reset.`);
+    } catch (err) {
+      setDashError(err.message || "Couldn't reset that PIN.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRosterDelete(userId, name) {
+    if (!window.confirm(`Remove ${name} from the roster? Their past hours stay in the sheet.`)) return;
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({ action: "deleteUser", userId, masterPin });
+      onUsersChange(users.filter((u) => u.id !== userId));
+    } catch (err) {
+      setDashError(err.message || "Couldn't remove that person.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!authed) {
+    return (
+      <div className="tc-body" style={{ textAlign: "center" }}>
+        <Shield size={22} style={{ marginBottom: 8, color: "var(--secondary)" }} />
+        <p className="tc-name" style={{ fontSize: 16 }}>Admin Dashboard</p>
+        <div className="tc-since">Enter the master PIN</div>
+        <form className="tc-unlock" onSubmit={handleAuth}>
+          <input
+            autoFocus
+            type="password"
+            inputMode="numeric"
+            placeholder="Master PIN"
+            value={masterPin}
+            onChange={(e) => setMasterPin(e.target.value.replace(/\D/g, ""))}
+          />
+          <button type="submit" disabled={busy || !masterPin}>{busy ? "Checking…" : "Enter"}</button>
+        </form>
+        {authError && <div className="tc-error" style={{ padding: "8px 0 0" }}>{authError}</div>}
+        <button className="tc-linklike" style={{ marginTop: 18 }} onClick={onClose}>
+          <X size={11} strokeWidth={2.5} /> Back
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tc-admin">
+      <div className="tc-admin-tabs">
+        <button className={tab === "sessions" ? "active" : ""} onClick={() => { setTab("sessions"); loadSessions(); }}>Open Sessions</button>
+        <button className={tab === "payperiod" ? "active" : ""} onClick={() => setTab("payperiod")}>Pay Period</button>
+        <button className={tab === "shifts" ? "active" : ""} onClick={() => setTab("shifts")}>Edit Shifts</button>
+        <button className={tab === "roster" ? "active" : ""} onClick={() => setTab("roster")}>Roster</button>
+      </div>
+
+      <div className="tc-admin-body">
+        {dashError && <div className="tc-error" style={{ padding: "0 0 12px" }}>{dashError}</div>}
+
+        {tab === "sessions" && (
+          <>
+            <div className="tc-admin-row-head">
+              <span>Who's clocked in — 12+ hours is flagged stale</span>
+              <button className="tc-admin-refresh" onClick={loadSessions} disabled={sessionsLoading}>
+                {sessionsLoading ? "…" : "Refresh"}
+              </button>
+            </div>
+            {sessions.length === 0 && !sessionsLoading && (
+              <div className="tc-empty">No one's currently clocked in.</div>
+            )}
+            {sessions.map((s) => (
+              <div key={s.userId} className={`tc-admin-item${s.stale ? " stale" : ""}`}>
+                <div>
+                  <div className="tc-admin-item-title">
+                    {s.name} {s.stale && <span className="tc-stale-tag">STALE</span>}
+                  </div>
+                  <div className="tc-admin-item-sub">
+                    since {formatTimeShort(s.clockInAt)} · {s.hoursElapsed}h elapsed
+                  </div>
+                </div>
+                <button className="tc-admin-action" onClick={() => handleForceClockOut(s.userId, s.name)} disabled={busy}>
+                  <LogOut size={12} /> Force out
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {tab === "payperiod" && (
+          <>
+            <div className="tc-admin-filters">
+              <input type="date" value={payStart} onChange={(e) => setPayStart(e.target.value)} />
+              <span>to</span>
+              <input type="date" value={payEnd} onChange={(e) => setPayEnd(e.target.value)} />
+              <button onClick={runPayPeriod} disabled={payLoading}>{payLoading ? "…" : "Run"}</button>
+            </div>
+            {paySummary && paySummary.length === 0 && <div className="tc-empty">No shifts in that range.</div>}
+            {paySummary && paySummary.length > 0 && (
+              <table className="tc-admin-table">
+                <thead>
+                  <tr><th>Name</th><th>Shifts</th><th>Hours</th></tr>
+                </thead>
+                <tbody>
+                  {paySummary.map((p) => (
+                    <tr key={p.email || p.name}>
+                      <td>{p.name}</td>
+                      <td>{p.shiftCount}</td>
+                      <td>{p.totalHours}</td>
+                    </tr>
+                  ))}
+                  <tr className="tc-admin-total-row">
+                    <td>Total</td>
+                    <td>{paySummary.reduce((sum, p) => sum + p.shiftCount, 0)}</td>
+                    <td>{Math.round(paySummary.reduce((sum, p) => sum + p.totalHours, 0) * 100) / 100}</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+
+        {tab === "shifts" && !editingShift && (
+          <>
+            <div className="tc-admin-filters">
+              <input type="date" value={shiftStart} onChange={(e) => setShiftStart(e.target.value)} />
+              <span>to</span>
+              <input type="date" value={shiftEnd} onChange={(e) => setShiftEnd(e.target.value)} />
+              <button onClick={runShiftSearch} disabled={shiftsLoading}>{shiftsLoading ? "…" : "Search"}</button>
+            </div>
+            {shifts && shifts.length === 0 && <div className="tc-empty">No shifts in that range.</div>}
+            {shifts && shifts.map((s) => (
+              <div key={s.shiftId} className="tc-admin-item">
+                <div>
+                  <div className="tc-admin-item-title">{s.name} — {s.date}</div>
+                  <div className="tc-admin-item-sub">
+                    {s.timeIn || "—"} → {s.timeOut || "open"} · {s.totalHours || 0}h
+                  </div>
+                </div>
+                <button className="tc-admin-action" onClick={() => openEdit(s)}>
+                  <Pencil size={12} /> Edit
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {tab === "shifts" && editingShift && (
+          <div className="tc-outform" style={{ margin: 0 }}>
+            <label>{editingShift.name} — Date</label>
+            <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+            <label>Time In</label>
+            <input type="time" value={editTimeIn} onChange={(e) => setEditTimeIn(e.target.value)} />
+            <label>Time Out</label>
+            <input type="time" value={editTimeOut} onChange={(e) => setEditTimeOut(e.target.value)} />
+            <label>Break (minutes)</label>
+            <input type="number" min="0" value={editBreak} onChange={(e) => setEditBreak(e.target.value)} />
+            <label>Notes</label>
+            <textarea rows={3} value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
+            <div className="tc-outform-actions">
+              <button className="cancel" onClick={() => setEditingShift(null)} disabled={busy}>Cancel</button>
+              <button className="confirm" onClick={saveEdit} disabled={busy}>{busy ? "Saving…" : "Save changes"}</button>
+            </div>
+          </div>
+        )}
+
+        {tab === "roster" && (
+          <>
+            {users.length === 0 && <div className="tc-empty">No one on the roster yet.</div>}
+            {users.map((u) => (
+              <div key={u.id} className="tc-admin-item">
+                <div>
+                  <div className="tc-admin-item-title">{u.name}</div>
+                  <div className="tc-admin-item-sub">{u.email || "no email"}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="tc-admin-action" onClick={() => handleResetPin(u.id, u.name)} disabled={busy}>
+                    <RotateCcw size={12} /> Reset PIN
+                  </button>
+                  <button className="tc-admin-action danger" onClick={() => handleRosterDelete(u.id, u.name)} disabled={busy}>
+                    <Trash2 size={12} /> Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      <button className="tc-linklike" style={{ margin: "4px auto 16px" }} onClick={onClose}>
+        <X size={11} strokeWidth={2.5} /> Exit admin dashboard
+      </button>
+    </div>
+  );
+}
+
 // ---------- formatting ----------
 // Pinned to Pacific so the app's clock/ledger always match the Sheet,
 // regardless of the timezone the viewing device happens to be set to.
@@ -109,6 +473,7 @@ export default function TimeClockApp() {
   const [busy, setBusy] = useState(false);
   const [stamp, setStamp] = useState(null);
   const [error, setError] = useState("");
+  const [showAdmin, setShowAdmin] = useState(false);
 
   // Nobody's status or history is visible until their own PIN is verified.
   // unlockedId tracks which single person is currently authenticated; pin
@@ -629,6 +994,150 @@ export default function TimeClockApp() {
           color: var(--secondary);
           font-size: 12px;
         }
+
+        .tc-admin-toggle {
+          background: none;
+          border: 1px solid var(--hairline);
+          border-radius: 6px;
+          color: var(--text-muted);
+          padding: 5px 7px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+        }
+        .tc-admin-toggle:hover { color: var(--secondary); border-color: var(--secondary-dim); }
+
+        .tc-admin { padding: 16px 18px 4px; }
+        .tc-admin-tabs {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-bottom: 16px;
+        }
+        .tc-admin-tabs button {
+          font-family: 'Space Mono', monospace;
+          font-size: 11px;
+          letter-spacing: 0.02em;
+          padding: 7px 10px;
+          border-radius: 6px;
+          border: 1px solid var(--hairline);
+          background: var(--surface-alt);
+          color: var(--text-muted);
+          cursor: pointer;
+        }
+        .tc-admin-tabs button.active { border-color: var(--secondary); color: var(--bg); background: var(--secondary); }
+        .tc-admin-body { min-height: 120px; }
+
+        .tc-admin-row-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 12px;
+          color: var(--text-muted);
+          margin-bottom: 10px;
+        }
+        .tc-admin-refresh {
+          font-family: 'Space Mono', monospace;
+          font-size: 11px;
+          background: var(--surface-alt);
+          border: 1px solid var(--hairline);
+          color: var(--text);
+          border-radius: 6px;
+          padding: 5px 10px;
+          cursor: pointer;
+        }
+
+        .tc-admin-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          padding: 10px 0;
+          border-top: 1px solid var(--hairline);
+        }
+        .tc-admin-item:first-child { border-top: none; }
+        .tc-admin-item.stale { background: rgba(255,93,74,0.06); margin: 0 -18px; padding: 10px 18px; }
+        .tc-admin-item-title { font-size: 13px; font-weight: 600; }
+        .tc-admin-item-sub { font-size: 11px; color: var(--text-muted); font-family: 'Space Mono', monospace; margin-top: 2px; }
+        .tc-stale-tag {
+          font-family: 'Space Mono', monospace;
+          font-size: 9px;
+          color: var(--red);
+          border: 1px solid var(--red);
+          border-radius: 4px;
+          padding: 1px 5px;
+          margin-left: 6px;
+          vertical-align: middle;
+        }
+        .tc-admin-action {
+          font-family: 'Space Mono', monospace;
+          font-size: 11px;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          background: var(--surface-alt);
+          border: 1px solid var(--hairline);
+          color: var(--text);
+          border-radius: 6px;
+          padding: 6px 10px;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .tc-admin-action:hover { border-color: var(--secondary); color: var(--secondary); }
+        .tc-admin-action.danger:hover { border-color: var(--red); color: var(--red); }
+        .tc-admin-action:disabled { opacity: 0.5; cursor: default; }
+
+        .tc-admin-filters {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-bottom: 14px;
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+        .tc-admin-filters input[type="date"] {
+          background: var(--surface-alt);
+          border: 1px solid var(--hairline);
+          border-radius: 6px;
+          color: var(--text);
+          padding: 7px 8px;
+          font-family: 'Inter', sans-serif;
+          font-size: 12px;
+        }
+        .tc-admin-filters button {
+          font-family: 'Space Mono', monospace;
+          font-size: 11px;
+          background: var(--secondary);
+          color: var(--bg);
+          border: none;
+          border-radius: 6px;
+          padding: 7px 12px;
+          cursor: pointer;
+        }
+
+        .tc-admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .tc-admin-table th {
+          text-align: left;
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-muted);
+          padding: 6px 4px;
+          border-bottom: 1px solid var(--hairline);
+        }
+        .tc-admin-table td {
+          padding: 8px 4px;
+          border-bottom: 1px solid var(--hairline);
+        }
+        .tc-admin-total-row td {
+          font-weight: 700;
+          color: var(--secondary);
+          border-bottom: none;
+          border-top: 2px solid var(--hairline);
+        }
+
         @media (prefers-reduced-motion: reduce) {
           .tc-stamp { animation: none; opacity: 0; }
           .tc-punch { transition: none; }
@@ -638,10 +1147,27 @@ export default function TimeClockApp() {
       <div className="tc-card">
         <div className="tc-header">
           <span className="tc-eyebrow">Time Clock</span>
-          <span className="tc-led">{formatClock(now)}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span className="tc-led">{formatClock(now)}</span>
+            {configured && (
+              <button
+                className="tc-admin-toggle"
+                onClick={() => setShowAdmin((v) => !v)}
+                title="Admin dashboard"
+              >
+                <Shield size={14} />
+              </button>
+            )}
+          </div>
         </div>
 
-        {!configured ? (
+        {showAdmin ? (
+          <AdminDashboard
+            users={users}
+            onUsersChange={setUsers}
+            onClose={() => setShowAdmin(false)}
+          />
+        ) : !configured ? (
           <div className="tc-setup">
             <AlertTriangle size={20} style={{ marginBottom: 8, color: "var(--secondary)" }} />
             <div>
