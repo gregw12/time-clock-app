@@ -311,7 +311,7 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
               <div key={s.userId} className={`tc-admin-item${s.stale ? " stale" : ""}`}>
                 <div>
                   <div className="tc-admin-item-title">
-                    {s.name} {s.stale && <span className="tc-stale-tag">STALE</span>}
+                    {s.name} {s.onBreak && <span className="tc-stale-tag" style={{ color: "var(--secondary)", borderColor: "var(--secondary)" }}>ON BREAK</span>} {s.stale && <span className="tc-stale-tag">STALE</span>}
                   </div>
                   <div className="tc-admin-item-sub">
                     since {formatTimeShort(s.clockInAt)} · {s.hoursElapsed}h elapsed
@@ -613,6 +613,30 @@ export default function TimeClockApp() {
     }
   }
 
+  async function doToggleBreak() {
+    if (!selectedId || busy) return;
+    setBusy(true);
+    setError("");
+    const wasOnBreak = statuses[selectedId]?.status === "break";
+    try {
+      const result = await jsonp({ action: "toggleBreak", userId: selectedId, pin });
+      setStatuses((prev) => ({
+        ...prev,
+        [selectedId]: {
+          ...prev[selectedId],
+          status: result.status,
+          breakStartAt: result.breakStartAt,
+          accumulatedBreakMinutes: result.accumulatedBreakMinutes,
+        },
+      }));
+      setStamp({ type: wasOnBreak ? "BACK" : "BREAK", key: Date.now() });
+    } catch (err) {
+      setError(err.message || "Couldn't update your break. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDeleteUser() {
     if (!selectedUser || busy) return;
     const masterPin = window.prompt(
@@ -652,7 +676,7 @@ export default function TimeClockApp() {
     setError("");
     try {
       await jsonp({ action: "cancelPunch", userId: selectedId, pin });
-      setStatuses((prev) => ({ ...prev, [selectedId]: { status: "out", clockInAt: null } }));
+      setStatuses((prev) => ({ ...prev, [selectedId]: { status: "out", clockInAt: null, breakStartAt: null, accumulatedBreakMinutes: 0 } }));
       resetFormState();
       loadHistory(selectedId);
     } catch (err) {
@@ -663,9 +687,12 @@ export default function TimeClockApp() {
   }
 
   const selectedUser = getUserById(users, selectedId);
-  const selectedStatus = statuses[selectedId] || { status: "out", clockInAt: null };
+  const selectedStatus = statuses[selectedId] || { status: "out", clockInAt: null, breakStartAt: null, accumulatedBreakMinutes: 0 };
   const clockedIn = selectedStatus.status === "in";
-  const elapsedMs = clockedIn && selectedStatus.clockInAt ? now - new Date(selectedStatus.clockInAt) : 0;
+  const onBreak = selectedStatus.status === "break";
+  const breakAlreadyTaken = (selectedStatus.accumulatedBreakMinutes || 0) > 0;
+  const elapsedMs = (clockedIn || onBreak) && selectedStatus.clockInAt ? now - new Date(selectedStatus.clockInAt) : 0;
+  const breakElapsedMs = onBreak && selectedStatus.breakStartAt ? now - new Date(selectedStatus.breakStartAt) : 0;
 
   return (
     <div className="tc-root">
@@ -813,6 +840,7 @@ export default function TimeClockApp() {
         .tc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
         .tc-dot.in { background: var(--secondary); }
         .tc-dot.out { background: var(--primary); }
+        .tc-dot.break { background: transparent; border: 2px solid var(--secondary); box-sizing: border-box; }
         .tc-since { font-size: 12px; color: var(--text-muted); margin-bottom: 22px; min-height: 16px; }
         .tc-unlock { display: flex; gap: 8px; max-width: 220px; margin: 0 auto; }
         .tc-unlock input {
@@ -860,6 +888,7 @@ export default function TimeClockApp() {
         }
         .tc-punch.in { border-color: var(--secondary); color: var(--secondary); background: rgba(145,197,235,0.10); }
         .tc-punch.out { border-color: var(--primary); color: var(--secondary); background: rgba(28,66,122,0.15); }
+        .tc-punch.break { border-color: var(--secondary); color: var(--bg); background: var(--secondary); font-size: 12px; }
         .tc-punch:active { transform: scale(0.96); }
         .tc-punch:disabled { opacity: 0.5; cursor: default; }
         .tc-punch:focus-visible { outline: 2px solid var(--secondary); outline-offset: 3px; }
@@ -1272,16 +1301,18 @@ export default function TimeClockApp() {
                   </div>
                   <p className="tc-name">{selectedUser.name}</p>
                   <div className="tc-status-row">
-                    <span className={`tc-dot ${clockedIn ? "in" : "out"}`} />
-                    {clockedIn ? "clocked in" : "clocked out"}
+                    <span className={`tc-dot ${onBreak ? "break" : clockedIn ? "in" : "out"}`} />
+                    {onBreak ? "on break" : clockedIn ? "clocked in" : "clocked out"}
                   </div>
                   <div className="tc-since">
-                    {clockedIn && selectedStatus.clockInAt &&
+                    {onBreak && selectedStatus.breakStartAt &&
+                      `break since ${formatTimeShort(selectedStatus.breakStartAt)} · ${formatDuration(breakElapsedMs)}`}
+                    {clockedIn && !onBreak && selectedStatus.clockInAt &&
                       `since ${formatTimeShort(selectedStatus.clockInAt)} · ${formatDuration(elapsedMs)}`}
-                    {!clockedIn && "ready to punch in"}
+                    {!clockedIn && !onBreak && "ready to punch in"}
                   </div>
 
-                  {!showOutForm && (
+                  {!showOutForm && !onBreak && (
                     <button
                       className={`tc-punch ${clockedIn ? "in" : "out"}`}
                       onClick={handlePunchTap}
@@ -1291,7 +1322,26 @@ export default function TimeClockApp() {
                     </button>
                   )}
 
-                  {!showOutForm && clockedIn && (
+                  {!showOutForm && onBreak && (
+                    <button className="tc-punch break" onClick={doToggleBreak} disabled={busy}>
+                      BACK FROM BREAK
+                    </button>
+                  )}
+
+                  {!showOutForm && clockedIn && !onBreak && !breakAlreadyTaken && (
+                    <button className="tc-linklike" onClick={doToggleBreak} disabled={busy}>
+                      <Clock3 size={11} strokeWidth={2.5} />
+                      Start a break
+                    </button>
+                  )}
+
+                  {!showOutForm && clockedIn && !onBreak && breakAlreadyTaken && (
+                    <div className="tc-since" style={{ marginBottom: 8, fontSize: 11 }}>
+                      Break taken · {Math.round(selectedStatus.accumulatedBreakMinutes)}m
+                    </div>
+                  )}
+
+                  {!showOutForm && (clockedIn || onBreak) && (
                     <button className="tc-linklike" onClick={handleCancelPunch} disabled={busy}>
                       <XCircle size={11} strokeWidth={2.5} />
                       Cancel this clock-in
