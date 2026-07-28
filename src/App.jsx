@@ -482,9 +482,8 @@ export default function TimeClockApp() {
   const [pin, setPin] = useState("");
   const [unlockError, setUnlockError] = useState("");
 
-  // clock-out step: ask for break + notes before confirming
+  // clock-out step: ask for notes before confirming
   const [showOutForm, setShowOutForm] = useState(false);
-  const [breakMinutes, setBreakMinutes] = useState("0");
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
@@ -524,7 +523,6 @@ export default function TimeClockApp() {
 
   function resetFormState() {
     setShowOutForm(false);
-    setBreakMinutes("0");
     setNotes("");
   }
 
@@ -599,7 +597,6 @@ export default function TimeClockApp() {
         action: "punch",
         userId: selectedId,
         pin,
-        breakMinutes: wasIn ? breakMinutes : undefined,
         notes: wasIn ? notes : undefined,
       });
       setStatuses((prev) => ({ ...prev, [selectedId]: result }));
@@ -912,6 +909,12 @@ export default function TimeClockApp() {
         .tc-linklike.subtle { opacity: 0.55; }
         .tc-linklike.subtle:hover { opacity: 1; color: var(--red); }
         .tc-linklike:disabled { opacity: 0.35; cursor: default; }
+        .tc-action-gap {
+          margin-top: 22px;
+          padding-top: 14px;
+          border-top: 1px solid var(--hairline);
+        }
+        .tc-action-gap .tc-linklike { margin-top: 0; }
 
         .tc-outform {
           margin-top: 4px;
@@ -1329,14 +1332,16 @@ export default function TimeClockApp() {
                   )}
 
                   {!showOutForm && clockedIn && !onBreak && !breakAlreadyTaken && (
-                    <button className="tc-linklike" onClick={doToggleBreak} disabled={busy}>
-                      <Clock3 size={11} strokeWidth={2.5} />
-                      Start a break
-                    </button>
+                    <div className="tc-action-gap">
+                      <button className="tc-linklike" onClick={doToggleBreak} disabled={busy}>
+                        <Clock3 size={11} strokeWidth={2.5} />
+                        Start a break
+                      </button>
+                    </div>
                   )}
 
                   {!showOutForm && clockedIn && !onBreak && breakAlreadyTaken && (
-                    <div className="tc-since" style={{ marginBottom: 8, fontSize: 11 }}>
+                    <div className="tc-since tc-action-gap" style={{ marginBottom: 8, fontSize: 11 }}>
                       Break taken · {Math.round(selectedStatus.accumulatedBreakMinutes)}m
                     </div>
                   )}
@@ -1357,13 +1362,6 @@ export default function TimeClockApp() {
 
                   {showOutForm && (
                     <div className="tc-outform">
-                      <label>Break (minutes)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={breakMinutes}
-                        onChange={(e) => setBreakMinutes(e.target.value)}
-                      />
                       <label>Notes (optional)</label>
                       <textarea
                         rows={3}
