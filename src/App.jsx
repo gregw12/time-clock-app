@@ -451,6 +451,11 @@ function formatTimeShort(iso) {
 function formatDateShort(iso) {
   return new Date(iso).toLocaleDateString("en-US", { timeZone: APP_TIMEZONE, month: "2-digit", day: "2-digit" });
 }
+function crossedMidnight(clockInIso, clockOutIso) {
+  const inDate = new Date(clockInIso).toLocaleDateString("en-US", { timeZone: APP_TIMEZONE });
+  const outDate = new Date(clockOutIso).toLocaleDateString("en-US", { timeZone: APP_TIMEZONE });
+  return inDate !== outDate;
+}
 function formatDuration(ms) {
   const totalMin = Math.floor(ms / 60000);
   return `${Math.floor(totalMin / 60)}h ${pad(totalMin % 60)}m`;
@@ -1003,6 +1008,7 @@ export default function TimeClockApp() {
           color: var(--text-muted);
         }
         .tc-row span.tc-dur { color: var(--text); }
+        .tc-plusday { color: var(--secondary); font-weight: 700; }
         .tc-empty { padding: 24px 20px 28px; text-align: center; color: var(--text-muted); font-size: 13px; }
         .tc-error {
           display: flex;
@@ -1390,7 +1396,10 @@ export default function TimeClockApp() {
                     {!historyLoading && history.length > 0 && history.map((h, i) => (
                       <div className="tc-row" key={i}>
                         <span>{formatDateShort(h.clockIn)}</span>
-                        <span>{formatTimeShort(h.clockIn)} → {formatTimeShort(h.clockOut)}</span>
+                        <span>
+                          {formatTimeShort(h.clockIn)} → {formatTimeShort(h.clockOut)}
+                          {crossedMidnight(h.clockIn, h.clockOut) && <span className="tc-plusday"> +1</span>}
+                        </span>
                         <span className="tc-dur">
                           {formatDuration(new Date(h.clockOut) - new Date(h.clockIn))}
                         </span>
