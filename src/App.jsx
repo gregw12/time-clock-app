@@ -48,6 +48,25 @@ function getUserById(users, id) {
   return users.find((u) => u.id === id) || null;
 }
 
+// Remembers which badge was last selected on THIS device — a convenience
+// (skip scrolling/tapping to find your name again), never a security
+// shortcut. PIN entry is still required every time regardless of this.
+const LAST_USER_KEY = "tc-last-user-id";
+function getLastUserId() {
+  try {
+    return window.localStorage.getItem(LAST_USER_KEY);
+  } catch {
+    return null; // private/incognito mode or storage disabled — fail quietly
+  }
+}
+function setLastUserId(id) {
+  try {
+    window.localStorage.setItem(LAST_USER_KEY, id);
+  } catch {
+    // ignore — worst case, it just won't be remembered next time
+  }
+}
+
 // ---------- avatar identity ----------
 // A curated palette (not just brand blues) so people stay visually distinct
 // even with a larger roster; deterministic per user so it's stable across
@@ -516,7 +535,11 @@ export default function TimeClockApp() {
       try {
         const data = await jsonp({ action: "bootstrap" });
         setUsers(data.users);
-        if (data.users.length > 0) setSelectedId(data.users[0].id);
+        if (data.users.length > 0) {
+          const remembered = getLastUserId();
+          const stillOnRoster = remembered && data.users.some((u) => u.id === remembered);
+          setSelectedId(stillOnRoster ? remembered : data.users[0].id);
+        }
       } catch {
         setError("Couldn't reach the sheet. Check the Web App URL and deployment access.");
       } finally {
@@ -533,6 +556,7 @@ export default function TimeClockApp() {
 
   function selectUser(id) {
     setSelectedId(id);
+    setLastUserId(id);
     setError("");
     setUnlockedId(null);
     setPin("");
