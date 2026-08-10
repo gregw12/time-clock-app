@@ -762,7 +762,10 @@ export default function TimeClockApp() {
           border: 1px solid var(--hairline);
           border-radius: 16px;
           overflow: hidden;
+          transition: background-color 0.5s ease;
         }
+        .tc-root[data-tone="in"] .tc-card { background: #2b4f70; }
+        .tc-root[data-tone="break"] .tc-card { background: #3a3768; }
         .tc-header {
           display: flex;
           align-items: baseline;
@@ -770,7 +773,10 @@ export default function TimeClockApp() {
           padding: 18px 20px;
           border-bottom: 1px solid var(--hairline);
           background: var(--surface-alt);
+          transition: background-color 0.5s ease;
         }
+        .tc-root[data-tone="in"] .tc-header { background: #35597c; }
+        .tc-root[data-tone="break"] .tc-header { background: #443f78; }
         .tc-eyebrow {
           font-family: 'Space Mono', monospace;
           font-size: 11px;
