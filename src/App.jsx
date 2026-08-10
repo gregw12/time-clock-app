@@ -753,8 +753,8 @@ export default function TimeClockApp() {
         }
         /* Whole-screen tone reflects the unlocked person's own status —
            a clear, ambient signal beyond just the badge dot/button. */
-        .tc-root[data-tone="in"] { background: #142a3d; }
-        .tc-root[data-tone="break"] { background: #1a2340; }
+        .tc-root[data-tone="in"] { background: #1f3f5c; }
+        .tc-root[data-tone="break"] { background: #2c2a54; }
         .tc-card {
           width: 100%;
           max-width: 460px;
