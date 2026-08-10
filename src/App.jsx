@@ -720,8 +720,14 @@ export default function TimeClockApp() {
   const elapsedMs = (clockedIn || onBreak) && selectedStatus.clockInAt ? now - new Date(selectedStatus.clockInAt) : 0;
   const breakElapsedMs = onBreak && selectedStatus.breakStartAt ? now - new Date(selectedStatus.breakStartAt) : 0;
 
+  // Whole-screen background reflects the unlocked person's own status —
+  // only once they're actually authenticated (not on the lock screen),
+  // so it never leaks anyone's state before their PIN is verified.
+  const isViewingUnlocked = unlockedId !== null && unlockedId === selectedId;
+  const screenTone = isViewingUnlocked ? (onBreak ? "break" : clockedIn ? "in" : "out") : "out";
+
   return (
-    <div className="tc-root">
+    <div className="tc-root" data-tone={screenTone}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -743,7 +749,12 @@ export default function TimeClockApp() {
           padding: 32px 16px;
           display: flex;
           justify-content: center;
+          transition: background-color 0.5s ease;
         }
+        /* Whole-screen tone reflects the unlocked person's own status —
+           a clear, ambient signal beyond just the badge dot/button. */
+        .tc-root[data-tone="in"] { background: #142a3d; }
+        .tc-root[data-tone="break"] { background: #1a2340; }
         .tc-card {
           width: 100%;
           max-width: 460px;
@@ -939,11 +950,31 @@ export default function TimeClockApp() {
         .tc-linklike.subtle:hover { opacity: 1; color: var(--red); }
         .tc-linklike:disabled { opacity: 0.35; cursor: default; }
         .tc-action-gap {
-          margin-top: 22px;
-          padding-top: 14px;
+          margin-top: 34px;
+          padding-top: 22px;
           border-top: 1px solid var(--hairline);
         }
         .tc-action-gap .tc-linklike { margin-top: 0; }
+        .tc-break-cta {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+          margin: 0 auto;
+          padding: 14px 20px;
+          border-radius: 10px;
+          border: 1.5px solid var(--secondary);
+          background: rgba(145,197,235,0.12);
+          color: var(--secondary);
+          font-family: 'Space Mono', monospace;
+          font-size: 13px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          cursor: pointer;
+        }
+        .tc-break-cta:hover { background: rgba(145,197,235,0.20); }
+        .tc-break-cta:disabled { opacity: 0.45; cursor: default; }
 
         .tc-outform {
           margin-top: 4px;
@@ -1363,8 +1394,8 @@ export default function TimeClockApp() {
 
                   {!showOutForm && clockedIn && !onBreak && !breakAlreadyTaken && (
                     <div className="tc-action-gap">
-                      <button className="tc-linklike" onClick={doToggleBreak} disabled={busy}>
-                        <Clock3 size={11} strokeWidth={2.5} />
+                      <button className="tc-break-cta" onClick={doToggleBreak} disabled={busy}>
+                        <Clock3 size={15} strokeWidth={2.5} />
                         Start a break
                       </button>
                     </div>
