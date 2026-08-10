@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut } from "lucide-react";
+import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut, ListChecks } from "lucide-react";
 
 // ---------------------------------------------------------------------
 // PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL HERE (ends in /exec)
@@ -145,6 +145,22 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
 
   const [dashError, setDashError] = useState("");
 
+  const [roster, setRoster] = useState(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
+
+  async function loadRoster() {
+    setRosterLoading(true);
+    setDashError("");
+    try {
+      const result = await jsonp({ action: "adminGetRoster", masterPin });
+      setRoster(result);
+    } catch (err) {
+      setDashError(err.message || "Couldn't load the roster.");
+    } finally {
+      setRosterLoading(false);
+    }
+  }
+
   async function handleAuth(e) {
     e.preventDefault();
     if (!masterPin || busy) return;
@@ -271,8 +287,24 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
     try {
       await jsonp({ action: "deleteUser", userId, masterPin });
       onUsersChange(users.filter((u) => u.id !== userId));
+      setRoster((prev) => (prev ? prev.filter((u) => u.id !== userId) : prev));
     } catch (err) {
       setDashError(err.message || "Couldn't remove that person.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleTaskTracking(userId, name, currentlyEnabled) {
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({ action: "adminSetTaskTracking", userId, enabled: !currentlyEnabled, masterPin });
+      setRoster((prev) =>
+        prev ? prev.map((u) => (u.id === userId ? { ...u, tasksEnabled: !currentlyEnabled } : u)) : prev
+      );
+    } catch (err) {
+      setDashError(err.message || "Couldn't update task tracking for " + name + ".");
     } finally {
       setBusy(false);
     }
@@ -309,7 +341,7 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
         <button className={tab === "sessions" ? "active" : ""} onClick={() => { setTab("sessions"); loadSessions(); }}>Open Sessions</button>
         <button className={tab === "payperiod" ? "active" : ""} onClick={() => setTab("payperiod")}>Pay Period</button>
         <button className={tab === "shifts" ? "active" : ""} onClick={() => setTab("shifts")}>Edit Shifts</button>
-        <button className={tab === "roster" ? "active" : ""} onClick={() => setTab("roster")}>Roster</button>
+        <button className={tab === "roster" ? "active" : ""} onClick={() => { setTab("roster"); loadRoster(); }}>Roster</button>
       </div>
 
       <div className="tc-admin-body">
@@ -423,14 +455,24 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
 
         {tab === "roster" && (
           <>
-            {users.length === 0 && <div className="tc-empty">No one on the roster yet.</div>}
-            {users.map((u) => (
+            {rosterLoading && <div className="tc-empty">Loading…</div>}
+            {!rosterLoading && roster && roster.length === 0 && <div className="tc-empty">No one on the roster yet.</div>}
+            {!rosterLoading && roster && roster.map((u) => (
               <div key={u.id} className="tc-admin-item">
                 <div>
                   <div className="tc-admin-item-title">{u.name}</div>
-                  <div className="tc-admin-item-sub">{u.email || "no email"}</div>
+                  <div className="tc-admin-item-sub">
+                    {u.email || "no email"}{u.tasksEnabled ? " · task tracking on" : ""}
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button
+                    className="tc-admin-action"
+                    onClick={() => handleToggleTaskTracking(u.id, u.name, u.tasksEnabled)}
+                    disabled={busy}
+                  >
+                    <ListChecks size={12} /> {u.tasksEnabled ? "Disable Tasks" : "Enable Tasks"}
+                  </button>
                   <button className="tc-admin-action" onClick={() => handleResetPin(u.id, u.name)} disabled={busy}>
                     <RotateCcw size={12} /> Reset PIN
                   </button>
@@ -510,6 +552,10 @@ export default function TimeClockApp() {
   const [showOutForm, setShowOutForm] = useState(false);
   const [notes, setNotes] = useState("");
 
+  // task-switching UI state (only relevant for tasksEnabled profiles)
+  const [showTaskPicker, setShowTaskPicker] = useState(false);
+  const [customTaskName, setCustomTaskName] = useState("");
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
@@ -552,6 +598,8 @@ export default function TimeClockApp() {
   function resetFormState() {
     setShowOutForm(false);
     setNotes("");
+    setShowTaskPicker(false);
+    setCustomTaskName("");
   }
 
   function selectUser(id) {
@@ -628,7 +676,10 @@ export default function TimeClockApp() {
         pin,
         notes: wasIn ? notes : undefined,
       });
-      setStatuses((prev) => ({ ...prev, [selectedId]: result }));
+      setStatuses((prev) => ({
+        ...prev,
+        [selectedId]: { ...prev[selectedId], ...result, currentTask: null, taskStartAt: null },
+      }));
       setStamp({ type: wasIn ? "OUT" : "IN", key: Date.now() });
       resetFormState();
       loadHistory(selectedId, pin);
@@ -653,11 +704,34 @@ export default function TimeClockApp() {
           status: result.status,
           breakStartAt: result.breakStartAt,
           accumulatedBreakMinutes: result.accumulatedBreakMinutes,
+          // going on break closes out any active task on the backend too
+          currentTask: result.status === "break" ? null : prev[selectedId]?.currentTask,
+          taskStartAt: result.status === "break" ? null : prev[selectedId]?.taskStartAt,
         },
       }));
       setStamp({ type: wasOnBreak ? "BACK" : "BREAK", key: Date.now() });
     } catch (err) {
       setError(err.message || "Couldn't update your break. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doSwitchTask(taskName) {
+    const name = (taskName || "").trim();
+    if (!selectedId || busy || !name) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await jsonp({ action: "switchTask", userId: selectedId, taskName: name, pin });
+      setStatuses((prev) => ({
+        ...prev,
+        [selectedId]: { ...prev[selectedId], currentTask: result.currentTask, taskStartAt: result.taskStartAt },
+      }));
+      setShowTaskPicker(false);
+      setCustomTaskName("");
+    } catch (err) {
+      setError(err.message || "Couldn't switch tasks. Try again.");
     } finally {
       setBusy(false);
     }
@@ -719,6 +793,7 @@ export default function TimeClockApp() {
   const breakAlreadyTaken = (selectedStatus.accumulatedBreakMinutes || 0) > 0;
   const elapsedMs = (clockedIn || onBreak) && selectedStatus.clockInAt ? now - new Date(selectedStatus.clockInAt) : 0;
   const breakElapsedMs = onBreak && selectedStatus.breakStartAt ? now - new Date(selectedStatus.breakStartAt) : 0;
+  const taskElapsedMs = selectedStatus.currentTask && selectedStatus.taskStartAt ? now - new Date(selectedStatus.taskStartAt) : 0;
 
   // Whole-screen background reflects the unlocked person's own status —
   // only once they're actually authenticated (not on the lock screen),
@@ -981,6 +1056,60 @@ export default function TimeClockApp() {
         }
         .tc-break-cta:hover { background: rgba(145,197,235,0.20); }
         .tc-break-cta:disabled { opacity: 0.45; cursor: default; }
+
+        .tc-task-current {
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          color: var(--text-muted);
+          margin-bottom: 6px;
+        }
+        .tc-task-picker {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          justify-content: center;
+        }
+        .tc-task-option {
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          padding: 9px 14px;
+          border-radius: 8px;
+          border: 1px solid var(--hairline);
+          background: var(--surface-alt);
+          color: var(--text);
+          cursor: pointer;
+        }
+        .tc-task-option:hover { border-color: var(--secondary); color: var(--secondary); }
+        .tc-task-option:disabled { opacity: 0.45; cursor: default; }
+        .tc-task-custom-row {
+          display: flex;
+          gap: 8px;
+          width: 100%;
+          margin-top: 4px;
+        }
+        .tc-task-custom-row input {
+          flex: 1;
+          background: var(--surface-alt);
+          border: 1px solid var(--hairline);
+          border-radius: 8px;
+          color: var(--text);
+          padding: 9px 10px;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+        }
+        .tc-task-custom-row input:focus { outline: 1px solid var(--secondary); border-color: var(--secondary); }
+        .tc-task-custom-row button {
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+          background: var(--secondary);
+          color: var(--bg);
+          border: none;
+          border-radius: 8px;
+          padding: 0 16px;
+          cursor: pointer;
+        }
+        .tc-task-custom-row button:disabled { opacity: 0.45; cursor: default; }
 
         .tc-outform {
           margin-top: 4px;
@@ -1410,6 +1539,48 @@ export default function TimeClockApp() {
                   {!showOutForm && clockedIn && !onBreak && breakAlreadyTaken && (
                     <div className="tc-since tc-action-gap" style={{ marginBottom: 8, fontSize: 11 }}>
                       Break taken · {Math.round(selectedStatus.accumulatedBreakMinutes)}m
+                    </div>
+                  )}
+
+                  {!showOutForm && selectedStatus.tasksEnabled && clockedIn && !onBreak && !showTaskPicker && (
+                    <div className="tc-action-gap">
+                      <div className="tc-task-current">
+                        {selectedStatus.currentTask
+                          ? `On: ${selectedStatus.currentTask} · ${formatDuration(taskElapsedMs)}`
+                          : "No task selected"}
+                      </div>
+                      <button className="tc-linklike" onClick={() => setShowTaskPicker(true)} disabled={busy}>
+                        <ListChecks size={11} strokeWidth={2.5} />
+                        {selectedStatus.currentTask ? "Switch Task" : "Choose a Task"}
+                      </button>
+                    </div>
+                  )}
+
+                  {!showOutForm && selectedStatus.tasksEnabled && clockedIn && !onBreak && showTaskPicker && (
+                    <div className="tc-action-gap tc-task-picker">
+                      {(selectedStatus.taskList || []).map((t) => (
+                        <button
+                          key={t}
+                          className="tc-task-option"
+                          onClick={() => doSwitchTask(t)}
+                          disabled={busy}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                      <div className="tc-task-custom-row">
+                        <input
+                          placeholder="Custom task"
+                          value={customTaskName}
+                          onChange={(e) => setCustomTaskName(e.target.value)}
+                        />
+                        <button onClick={() => doSwitchTask(customTaskName)} disabled={busy || !customTaskName.trim()}>
+                          Go
+                        </button>
+                      </div>
+                      <button className="tc-linklike" onClick={() => setShowTaskPicker(false)} disabled={busy}>
+                        Never mind
+                      </button>
                     </div>
                   )}
 
