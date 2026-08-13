@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut, ListChecks } from "lucide-react";
 
 // ---------------------------------------------------------------------
@@ -541,6 +541,15 @@ export default function TimeClockApp() {
   const [error, setError] = useState("");
   const [showAdmin, setShowAdmin] = useState(false);
 
+  // Guards against a single tap firing two requests (double-tap, or a
+  // known mobile quirk where one touch can dispatch two click events).
+  // A ref updates synchronously, unlike `busy` — two click events fired
+  // back-to-back in the same tick both see busy=false (React hasn't
+  // re-rendered yet), so the state-based check alone wasn't enough to
+  // stop a genuine double-fire from sending two punch requests, which
+  // would flip the toggle twice and silently undo the actual tap.
+  const actionInFlightRef = useRef(false);
+
   // Nobody's status or history is visible until their own PIN is verified.
   // unlockedId tracks which single person is currently authenticated; pin
   // is kept in state afterward so punch/cancel don't need to re-ask.
@@ -665,7 +674,8 @@ export default function TimeClockApp() {
   }
 
   async function doPunch() {
-    if (!selectedId || busy) return;
+    if (!selectedId || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setBusy(true);
     setError("");
     const wasIn = statuses[selectedId]?.status === "in";
@@ -686,12 +696,14 @@ export default function TimeClockApp() {
     } catch (err) {
       setError(err.message || "Couldn't save that punch. Check your connection and try again.");
     } finally {
+      actionInFlightRef.current = false;
       setBusy(false);
     }
   }
 
   async function doToggleBreak() {
-    if (!selectedId || busy) return;
+    if (!selectedId || actionInFlightRef.current) return;
+    actionInFlightRef.current = true;
     setBusy(true);
     setError("");
     const wasOnBreak = statuses[selectedId]?.status === "break";
@@ -713,13 +725,15 @@ export default function TimeClockApp() {
     } catch (err) {
       setError(err.message || "Couldn't update your break. Try again.");
     } finally {
+      actionInFlightRef.current = false;
       setBusy(false);
     }
   }
 
   async function doSwitchTask(taskName) {
     const name = (taskName || "").trim();
-    if (!selectedId || busy || !name) return;
+    if (!selectedId || actionInFlightRef.current || !name) return;
+    actionInFlightRef.current = true;
     setBusy(true);
     setError("");
     try {
@@ -733,45 +747,16 @@ export default function TimeClockApp() {
     } catch (err) {
       setError(err.message || "Couldn't switch tasks. Try again.");
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDeleteUser() {
-    if (!selectedUser || busy) return;
-    const masterPin = window.prompt(
-      `Enter the master PIN to remove ${selectedUser.name} from the roster. Their past hours stay in the sheet — this only removes them from the tap list.`
-    );
-    if (masterPin === null) return;
-    setBusy(true);
-    setError("");
-    try {
-      await jsonp({ action: "deleteUser", userId: selectedUser.id, masterPin });
-      const remaining = users.filter((u) => u.id !== selectedUser.id);
-      setUsers(remaining);
-      setStatuses((prev) => {
-        const next = { ...prev };
-        delete next[selectedUser.id];
-        return next;
-      });
-      if (remaining.length > 0) {
-        selectUser(remaining[0].id);
-      } else {
-        setSelectedId(null);
-        setUnlockedId(null);
-        setHistory([]);
-      }
-    } catch (err) {
-      setError(err.message || "Couldn't remove that person. Try again.");
-    } finally {
+      actionInFlightRef.current = false;
       setBusy(false);
     }
   }
 
   async function handleCancelPunch() {
-    if (!selectedId || busy) return;
+    if (!selectedId || actionInFlightRef.current) return;
     const confirmed = window.confirm("Cancel this clock-in? It won't be logged as a shift.");
     if (!confirmed) return;
+    actionInFlightRef.current = true;
     setBusy(true);
     setError("");
     try {
@@ -782,6 +767,7 @@ export default function TimeClockApp() {
     } catch (err) {
       setError(err.message || "Couldn't cancel that clock-in. Try again.");
     } finally {
+      actionInFlightRef.current = false;
       setBusy(false);
     }
   }
@@ -815,6 +801,7 @@ export default function TimeClockApp() {
           --secondary: #91c5eb;
           --secondary-dim: #4f7aa8;
           --red: #ff5d4a;
+          --green: #22c55e;
           --text: #f1f1f1;
           --text-muted: #9aa6c0;
           font-family: 'Inter', sans-serif;
@@ -956,8 +943,8 @@ export default function TimeClockApp() {
           margin-bottom: 4px;
         }
         .tc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
-        .tc-dot.in { background: var(--secondary); }
-        .tc-dot.out { background: var(--primary); }
+        .tc-dot.in { background: var(--green); }
+        .tc-dot.out { background: var(--red); }
         .tc-dot.break { background: transparent; border: 2px solid var(--secondary); box-sizing: border-box; }
         .tc-since { font-size: 12px; color: var(--text-muted); margin-bottom: 22px; min-height: 16px; }
         .tc-unlock { display: flex; gap: 8px; max-width: 220px; margin: 0 auto; }
@@ -1004,8 +991,8 @@ export default function TimeClockApp() {
           margin: 0 auto;
           transition: transform 0.08s ease, border-color 0.2s ease, background 0.2s ease;
         }
-        .tc-punch.in { border-color: var(--secondary); color: var(--secondary); background: rgba(145,197,235,0.10); }
-        .tc-punch.out { border-color: var(--primary); color: var(--secondary); background: rgba(28,66,122,0.15); }
+        .tc-punch.in { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.12); }
+        .tc-punch.out { border-color: var(--red); color: var(--red); background: rgba(255,93,74,0.12); }
         .tc-punch.break { border-color: var(--secondary); color: var(--bg); background: var(--secondary); font-size: 12px; }
         .tc-punch:active { transform: scale(0.96); }
         .tc-punch:disabled { opacity: 0.5; cursor: default; }
@@ -1588,13 +1575,6 @@ export default function TimeClockApp() {
                     <button className="tc-linklike" onClick={handleCancelPunch} disabled={busy}>
                       <XCircle size={11} strokeWidth={2.5} />
                       Cancel this clock-in
-                    </button>
-                  )}
-
-                  {!showOutForm && (
-                    <button className="tc-linklike subtle" onClick={handleDeleteUser} disabled={busy}>
-                      <Trash2 size={11} strokeWidth={2.5} />
-                      Remove {selectedUser.name} from roster
                     </button>
                   )}
 
