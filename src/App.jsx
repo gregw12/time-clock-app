@@ -134,6 +134,7 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
 
   const [shiftStart, setShiftStart] = useState(defaults.start);
   const [shiftEnd, setShiftEnd] = useState(defaults.end);
+  const [shiftNameFilter, setShiftNameFilter] = useState("");
   const [shifts, setShifts] = useState(null);
   const [shiftsLoading, setShiftsLoading] = useState(false);
   const [editingShift, setEditingShift] = useState(null); // shift object being edited
@@ -153,7 +154,7 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
     setDashError("");
     try {
       const result = await jsonp({ action: "adminGetRoster", masterPin });
-      setRoster(result);
+      setRoster([...result].sort((a, b) => a.name.localeCompare(b.name)));
     } catch (err) {
       setDashError(err.message || "Couldn't load the roster.");
     } finally {
@@ -230,6 +231,24 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
       setShiftsLoading(false);
     }
   }
+
+  async function handleDeleteShift(shift) {
+    if (!window.confirm(`Delete ${shift.name}'s shift on ${shift.date}? This can't be undone.`)) return;
+    setBusy(true);
+    setDashError("");
+    try {
+      await jsonp({ action: "adminDeleteShift", shiftId: shift.shiftId, masterPin });
+      runShiftSearch();
+    } catch (err) {
+      setDashError(err.message || "Couldn't delete that shift.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const filteredShifts = shifts
+    ? shifts.filter((s) => s.name.toLowerCase().includes(shiftNameFilter.trim().toLowerCase()))
+    : shifts;
 
   function openEdit(shift) {
     setEditingShift(shift);
@@ -417,8 +436,19 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
               <input type="date" value={shiftEnd} onChange={(e) => setShiftEnd(e.target.value)} />
               <button onClick={runShiftSearch} disabled={shiftsLoading}>{shiftsLoading ? "…" : "Search"}</button>
             </div>
+            {shifts && shifts.length > 0 && (
+              <input
+                className="tc-shift-name-filter"
+                placeholder="Search by name…"
+                value={shiftNameFilter}
+                onChange={(e) => setShiftNameFilter(e.target.value)}
+              />
+            )}
             {shifts && shifts.length === 0 && <div className="tc-empty">No shifts in that range.</div>}
-            {shifts && shifts.map((s) => (
+            {shifts && shifts.length > 0 && filteredShifts.length === 0 && (
+              <div className="tc-empty">No shifts match "{shiftNameFilter}".</div>
+            )}
+            {filteredShifts && filteredShifts.map((s) => (
               <div key={s.shiftId} className="tc-admin-item">
                 <div>
                   <div className="tc-admin-item-title">{s.name} — {s.date}</div>
@@ -426,9 +456,14 @@ function AdminDashboard({ users, onUsersChange, onClose }) {
                     {s.timeIn || "—"} → {s.timeOut || "open"} · {s.totalHours || 0}h
                   </div>
                 </div>
-                <button className="tc-admin-action" onClick={() => openEdit(s)}>
-                  <Pencil size={12} /> Edit
-                </button>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="tc-admin-action" onClick={() => openEdit(s)} disabled={busy}>
+                    <Pencil size={12} /> Edit
+                  </button>
+                  <button className="tc-admin-action danger" onClick={() => handleDeleteShift(s)} disabled={busy}>
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
               </div>
             ))}
           </>
@@ -589,11 +624,12 @@ export default function TimeClockApp() {
       setError("");
       try {
         const data = await jsonp({ action: "bootstrap" });
-        setUsers(data.users);
-        if (data.users.length > 0) {
+        const sortedUsers = [...data.users].sort((a, b) => a.name.localeCompare(b.name));
+        setUsers(sortedUsers);
+        if (sortedUsers.length > 0) {
           const remembered = getLastUserId();
-          const stillOnRoster = remembered && data.users.some((u) => u.id === remembered);
-          setSelectedId(stillOnRoster ? remembered : data.users[0].id);
+          const stillOnRoster = remembered && sortedUsers.some((u) => u.id === remembered);
+          setSelectedId(stillOnRoster ? remembered : sortedUsers[0].id);
         }
       } catch {
         setError("Couldn't reach the sheet. Check the Web App URL and deployment access.");
@@ -649,7 +685,7 @@ export default function TimeClockApp() {
     setError("");
     try {
       const user = await jsonp({ action: "addUser", name, email, pin: pinValue });
-      setUsers((prev) => [...prev, user]);
+      setUsers((prev) => [...prev, user].sort((a, b) => a.name.localeCompare(b.name)));
       setNewName("");
       setNewEmail("");
       setNewPin("");
@@ -871,6 +907,13 @@ export default function TimeClockApp() {
           flex-shrink: 0;
         }
         .tc-avatar-sm { width: 18px; height: 18px; font-size: 8px; }
+        .tc-avatar-md {
+          width: 36px;
+          height: 36px;
+          font-size: 14px;
+          margin: 0;
+          border: 2px solid var(--surface-alt);
+        }
         .tc-avatar-lg {
           width: 56px;
           height: 56px;
@@ -878,6 +921,15 @@ export default function TimeClockApp() {
           margin: 0 auto 12px;
           border: 3px solid var(--surface-alt);
         }
+        .tc-profile-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          justify-content: flex-start;
+          text-align: left;
+          margin-bottom: 14px;
+        }
+        .tc-name-inline { margin: 0; }
         .tc-badge {
           font-family: 'Space Mono', monospace;
           font-size: 12px;
@@ -1330,6 +1382,19 @@ export default function TimeClockApp() {
           padding: 7px 12px;
           cursor: pointer;
         }
+        .tc-shift-name-filter {
+          display: block;
+          width: 100%;
+          background: var(--surface-alt);
+          border: 1px solid var(--hairline);
+          border-radius: 8px;
+          color: var(--text);
+          padding: 8px 10px;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+          margin-bottom: 12px;
+        }
+        .tc-shift-name-filter:focus { outline: 1px solid var(--secondary); border-color: var(--secondary); }
 
         .tc-admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .tc-admin-table th {
@@ -1479,13 +1544,15 @@ export default function TimeClockApp() {
 
               {selectedUser && unlockedId === selectedUser.id && (
                 <>
-                  <div
-                    className="tc-avatar tc-avatar-lg"
-                    style={{ background: colorForUser(selectedUser.id) }}
-                  >
-                    {initialsForName(selectedUser.name)}
+                  <div className="tc-profile-row">
+                    <div
+                      className="tc-avatar tc-avatar-md"
+                      style={{ background: colorForUser(selectedUser.id) }}
+                    >
+                      {initialsForName(selectedUser.name)}
+                    </div>
+                    <p className="tc-name tc-name-inline">{selectedUser.name}</p>
                   </div>
-                  <p className="tc-name">{selectedUser.name}</p>
                   <div className="tc-status-row">
                     <span className={`tc-dot ${onBreak ? "break" : clockedIn ? "in" : "out"}`} />
                     {onBreak ? "on break" : clockedIn ? "clocked in" : "clocked out"}
