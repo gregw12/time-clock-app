@@ -599,6 +599,10 @@ export default function TimeClockApp() {
   // task-switching UI state (only relevant for tasksEnabled profiles)
   const [showTaskPicker, setShowTaskPicker] = useState(false);
   const [customTaskName, setCustomTaskName] = useState("");
+  // separate picker shown at the moment of clocking IN, for tasksEnabled
+  // profiles, so they can start on a task immediately rather than
+  // clocking in first and switching tasks as a second step
+  const [showStartTaskPicker, setShowStartTaskPicker] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -644,6 +648,7 @@ export default function TimeClockApp() {
     setShowOutForm(false);
     setNotes("");
     setShowTaskPicker(false);
+    setShowStartTaskPicker(false);
     setCustomTaskName("");
   }
 
@@ -698,12 +703,17 @@ export default function TimeClockApp() {
     }
   }
 
-  // Clock-in fires immediately; clock-out opens the break/notes step first.
+  // Clock-out opens the notes step first. Clock-in fires immediately for
+  // most people, but for tasksEnabled profiles it opens a task picker
+  // first, so they can start their shift already on a task instead of
+  // clocking in and separately switching tasks as a second step.
   function handlePunchTap() {
     if (!selectedId || busy) return;
     const clockedIn = statuses[selectedId]?.status === "in";
     if (clockedIn) {
       setShowOutForm(true);
+    } else if (statuses[selectedId]?.tasksEnabled) {
+      setShowStartTaskPicker(true);
     } else {
       doPunch();
     }
@@ -731,6 +741,43 @@ export default function TimeClockApp() {
       loadHistory(selectedId, pin);
     } catch (err) {
       setError(err.message || "Couldn't save that punch. Check your connection and try again.");
+    } finally {
+      actionInFlightRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  // Clocks in, then (if a task was chosen) immediately switches to it in
+  // a second call — two backend actions chained together on the
+  // frontend, since switchTask requires already being clocked in.
+  async function doClockInWithTask(taskName) {
+    if (!selectedId || actionInFlightRef.current) return;
+    const task = (taskName || "").trim();
+    actionInFlightRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const punchResult = await jsonp({ action: "punch", userId: selectedId, pin });
+      let merged = { ...statuses[selectedId], ...punchResult, currentTask: null, taskStartAt: null };
+
+      if (task) {
+        try {
+          const taskResult = await jsonp({ action: "switchTask", userId: selectedId, taskName: task, pin });
+          merged = { ...merged, currentTask: taskResult.currentTask, taskStartAt: taskResult.taskStartAt };
+        } catch (taskErr) {
+          // Clock-in already succeeded — don't lose that because the
+          // follow-up task selection failed. Just surface the smaller
+          // error; they can still "Switch Task" normally afterward.
+          setError(taskErr.message || "Clocked in, but couldn't set your starting task.");
+        }
+      }
+
+      setStatuses((prev) => ({ ...prev, [selectedId]: merged }));
+      setStamp({ type: "IN", key: Date.now() });
+      resetFormState();
+      loadHistory(selectedId, pin);
+    } catch (err) {
+      setError(err.message || "Couldn't clock in. Check your connection and try again.");
     } finally {
       actionInFlightRef.current = false;
       setBusy(false);
@@ -1565,7 +1612,7 @@ export default function TimeClockApp() {
                     {!clockedIn && !onBreak && "ready to punch in"}
                   </div>
 
-                  {!showOutForm && !onBreak && (
+                  {!showOutForm && !showStartTaskPicker && !onBreak && (
                     <button
                       className={`tc-punch ${clockedIn ? "in" : "out"}`}
                       onClick={handlePunchTap}
@@ -1573,6 +1620,41 @@ export default function TimeClockApp() {
                     >
                       {clockedIn ? "PUNCH OUT" : "PUNCH IN"}
                     </button>
+                  )}
+
+                  {!showOutForm && showStartTaskPicker && !clockedIn && (
+                    <div className="tc-task-picker">
+                      <div className="tc-task-current" style={{ width: "100%", marginBottom: 4 }}>
+                        What are you working on?
+                      </div>
+                      {(selectedStatus.taskList || []).map((t) => (
+                        <button
+                          key={t}
+                          className="tc-task-option"
+                          onClick={() => doClockInWithTask(t)}
+                          disabled={busy}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                      <div className="tc-task-custom-row">
+                        <input
+                          placeholder="Custom task"
+                          value={customTaskName}
+                          onChange={(e) => setCustomTaskName(e.target.value)}
+                        />
+                        <button onClick={() => doClockInWithTask(customTaskName)} disabled={busy || !customTaskName.trim()}>
+                          Go
+                        </button>
+                      </div>
+                      <button
+                        className="tc-linklike"
+                        onClick={() => doClockInWithTask(null)}
+                        disabled={busy}
+                      >
+                        {busy ? "Clocking in…" : "Just clock in, no task yet"}
+                      </button>
+                    </div>
                   )}
 
                   {!showOutForm && onBreak && (
