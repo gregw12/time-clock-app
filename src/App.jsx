@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut, ListChecks } from "lucide-react";
+import { Plus, Clock3, AlertTriangle, Trash2, XCircle, Shield, X, RotateCcw, Pencil, LogOut, ListChecks, RefreshCw } from "lucide-react";
+// Provided by vite-plugin-pwa at build time (registerType: "prompt" in
+// vite.config.js) — lets us show our own "update available" banner
+// instead of the service worker silently updating in the background and
+// only taking effect on some future natural reload.
+import { registerSW } from "virtual:pwa-register";
 
 // ---------------------------------------------------------------------
 // PASTE YOUR DEPLOYED APPS SCRIPT WEB APP URL HERE (ends in /exec)
@@ -575,6 +580,8 @@ export default function TimeClockApp() {
   const [stamp, setStamp] = useState(null);
   const [error, setError] = useState("");
   const [showAdmin, setShowAdmin] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const updateSWRef = useRef(null);
 
   // Guards against a single tap firing two requests (double-tap, or a
   // known mobile quirk where one touch can dispatch two click events).
@@ -608,6 +615,31 @@ export default function TimeClockApp() {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Detects a new deployed version and shows our own banner instead of
+  // the service worker silently swapping in the background — the
+  // installed PWA would otherwise only pick up a new version on some
+  // future natural close/reopen, with no indication anything changed.
+  useEffect(() => {
+    updateSWRef.current = registerSW({
+      onNeedRefresh() {
+        setUpdateAvailable(true);
+      },
+      onRegisteredSW(swUrl, registration) {
+        if (!registration) return;
+        // An already-open tab has no reason to re-check on its own —
+        // poll periodically so someone who leaves the app open for a
+        // long shift still gets notified once a new version ships.
+        setInterval(() => {
+          registration.update();
+        }, 60 * 60 * 1000);
+      },
+    });
+  }, []);
+
+  function handleUpdateApp() {
+    if (updateSWRef.current) updateSWRef.current(true);
+  }
 
   const loadHistory = useCallback(async (userId, pinValue) => {
     setHistoryLoading(true);
@@ -908,9 +940,26 @@ export default function TimeClockApp() {
           border-radius: 16px;
           overflow: hidden;
           transition: background-color 0.5s ease;
+          position: relative;
         }
         .tc-root[data-tone="in"] .tc-card { background: #2b4f70; }
         .tc-root[data-tone="break"] .tc-card { background: #3a3768; }
+        .tc-processing-overlay {
+          position: absolute;
+          inset: 0;
+          background: rgba(13,14,32,0.82);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 14px;
+          z-index: 50;
+          color: var(--text);
+          font-family: 'Space Mono', monospace;
+          font-size: 13px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
         .tc-header {
           display: flex;
           align-items: baseline;
@@ -1096,6 +1145,18 @@ export default function TimeClockApp() {
         .tc-punch:active { transform: scale(0.96); }
         .tc-punch:disabled { opacity: 0.5; cursor: default; }
         .tc-punch:focus-visible { outline: 2px solid var(--secondary); outline-offset: 3px; }
+        .tc-spinner {
+          display: inline-block;
+          width: 22px;
+          height: 22px;
+          border: 3px solid rgba(255,255,255,0.25);
+          border-top-color: currentColor;
+          border-radius: 50%;
+          animation: tc-spin 0.7s linear infinite;
+        }
+        @keyframes tc-spin {
+          to { transform: rotate(360deg); }
+        }
 
         .tc-linklike {
           display: flex;
@@ -1443,6 +1504,41 @@ export default function TimeClockApp() {
         }
         .tc-shift-name-filter:focus { outline: 1px solid var(--secondary); border-color: var(--secondary); }
 
+        .tc-update-banner {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          background: var(--secondary);
+          color: var(--bg);
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 10px 16px;
+          padding-top: calc(10px + env(safe-area-inset-top, 0px));
+          text-align: center;
+        }
+        .tc-update-banner button {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: var(--bg);
+          color: var(--secondary);
+          border: none;
+          border-radius: 6px;
+          padding: 6px 12px;
+          font-family: 'Space Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
         .tc-admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .tc-admin-table th {
           text-align: left;
@@ -1468,10 +1564,27 @@ export default function TimeClockApp() {
         @media (prefers-reduced-motion: reduce) {
           .tc-stamp { animation: none; opacity: 0; }
           .tc-punch { transition: none; }
+          .tc-spinner { animation: none; }
         }
       `}</style>
 
+      {updateAvailable && (
+        <div className="tc-update-banner">
+          <span>A new version is available.</span>
+          <button onClick={handleUpdateApp}>
+            <RefreshCw size={12} strokeWidth={2.5} />
+            Update now
+          </button>
+        </div>
+      )}
+
       <div className="tc-card">
+        {busy && (
+          <div className="tc-processing-overlay">
+            <span className="tc-spinner" />
+            <span>Processing…</span>
+          </div>
+        )}
         <div className="tc-header">
           <span className="tc-eyebrow">Time Clock</span>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1618,7 +1731,7 @@ export default function TimeClockApp() {
                       onClick={handlePunchTap}
                       disabled={busy || loading}
                     >
-                      {clockedIn ? "PUNCH OUT" : "PUNCH IN"}
+                      {busy ? <span className="tc-spinner" /> : (clockedIn ? "PUNCH OUT" : "PUNCH IN")}
                     </button>
                   )}
 
@@ -1659,7 +1772,7 @@ export default function TimeClockApp() {
 
                   {!showOutForm && onBreak && (
                     <button className="tc-punch break" onClick={doToggleBreak} disabled={busy}>
-                      BACK FROM BREAK
+                      {busy ? <span className="tc-spinner" /> : "BACK FROM BREAK"}
                     </button>
                   )}
 
